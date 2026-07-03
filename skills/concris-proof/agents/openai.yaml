@@ -1,0 +1,4 @@
+interface:
+  display_name: "ConCRIS Proof"
+  short_description: "General ConCRIS/Rocq proof engineering."
+  default_prompt: "Use $concris-proof to debug or develop a ConCRIS/Rocq proof."

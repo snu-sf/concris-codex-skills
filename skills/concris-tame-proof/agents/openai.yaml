@@ -1,0 +1,4 @@
+interface:
+  display_name: "ConCRIS Tame Proof"
+  short_description: "Proof workflow for ConCRIS tame specifications."
+  default_prompt: "Use $concris-tame-proof for ConCRIS proofs against tame specifications, tame_triple, and tame_update."
