@@ -8,6 +8,11 @@ This repository contains three skills:
 - `concris-helping-proof`: proofs involving `Helping.run`, `Helping.help`, pending jobs, and helping resources.
 - `concris-tame-proof`: proofs against tame specifications such as `tame_triple` and `tame_update`.
 
+The specialized skills track current ConCRIS development APIs. They instruct
+Codex to inspect the checked-out definitions and lemma statements before using
+version-specific proof patterns. Some APIs may be unavailable in older CRIS
+releases or workshop snapshots.
+
 ## Install
 
 Clone this repository, then run:
@@ -50,4 +55,7 @@ ln -s "$PWD/skills/concris-tame-proof" "${CODEX_HOME:-$HOME/.codex}/skills/concr
 
 - Keep human-facing docs in this repository root, not inside individual skill folders.
 - Keep each skill folder focused on files Codex should load: `SKILL.md`, `agents/openai.yaml`, and any necessary `references/`, `scripts/`, or `assets/`.
-- If the repository becomes public, choose and add a license first.
+
+## License
+
+MIT

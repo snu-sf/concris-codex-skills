@@ -1,159 +1,277 @@
 ---
 name: concris-helping-proof
-description: Use for ConCRIS/Rocq proofs involving the Helping modules, including Helping.run, Helping.help, jobCode, HelpPend/HelpDone/HelpAuth resources, IstHelp_gen payload management, helping erasure, HelpingOn/HelpingOff refinements, and examples where clients can run or help pending operations.
+description: "Use for ConCRIS/Rocq proof engineering involving the resource-only Helping modules: Helping.run, reqid-only HelpingOn.try_run, Helping.help, HelpPend/HelpDone resources, cancellable hinv ownership, IstHelp and nested client invariants, HelpingOn/HelpingOff erasure, helping_main composition, and example clients whose owners or helpers execute pending jobs."
 ---
 
-# ConCRIS Helping Proofs
+# ConCRIS Resource-Only Helping Proofs
 
-Use this skill together with `concris-proof`. This skill is for proofs that interact with the user-level helping module rather than treating helping as an Iris invariant trick.
+Use this skill together with `concris-proof`; apply its Coqtail, recovery, and
+resource workflow. Treat Helping as intermediate proof machinery that lets an
+owner or another thread execute a registered job. Do not turn it into a
+client-visible abstract specification.
 
-## Tool Discipline
+## Find the Current API First
 
-- Use `mcp__coqtail__` as the default proof interface for helping proofs: step through owner-run/helper-run branches, inspect goals, and query lemmas in the live context.
-- Do not debug helping proofs by repeatedly running plain `make`. Use batch builds only after coqtail has localized or cleared the proof issue, or when checking dependents.
-- Restart or reload coqtail sessions after file edits so stale proof states do not guide the proof.
+Inspect these files before changing a proof:
 
-## Mental Model
+- `library/helping/HelpingOn.v`: executable `run`, reqid-only `try_run`, and `help`
+- `library/helping/HelpingResource.v`: public `HelpPend` and `HelpDone`
+- `library/helping/HelpingTactics.v`: client reasoning rules, `IstHelp`, and `hinv`
+- `library/helping/HelpingFacts.v`: `help_alloc`, `helping_main`, and
+  `helping_main_filtered`
+- `library/helping/HelpingOnOffResource.v` and `HelpingOnOffproof.v`: private
+  erasure protocol and soundness proof
 
-The helping module attaches to a specification layer so that another thread can
-execute the specified operation on behalf of the original caller. For proofs
-that need helping, the standard shape is:
+Confirm the checked-out version instead of trusting an old proof:
 
-1. first prove the intermediate module `M` that contains the `Helping.run` /
-   `Helping.help` calls;
-2. then refine or erase from `M` to the corresponding non-helping spec/module.
+```sh
+rg -n "Definition (IstHelp|IstHelp_gen)|Definition try_run|Lemma wsim_helping" \
+  library/helping
+```
 
-Do not skip the intermediate `M` layer or reinterpret a module containing
-helping calls as an ordinary non-helping implementation.
+The current resource-only API uses `IstHelp`; `IstHelp_gen` is legacy. Never
+recreate `IstHelp_gen`, expose `HelpingOn.v_reqs`, or give client proofs
+`HelpAuth` merely to port an old script. If the checkout only contains the
+legacy API, report that version mismatch before applying current snippets.
 
-Helping separates one logical operation into:
+## Current Operational Model
 
-- request creation by `Helping.run`;
-- optional execution by the owner or a helper;
-- persistent completion via `HelpDone`;
-- client payload resources stored in `IstHelp_gen`.
+Keep the following flow in mind:
 
-Keep two layers distinct:
+1. `Helping.run (N, arg)` takes a fresh `reqid`, assumes
+   `HelpPend reqid N arg`, yields at `N`, and calls `try_run reqid`.
+2. `HelpingOn.try_run reqid` chooses either:
+   - a persistent completed result, justified by
+     `Guarantee (HelpDone reqid ret)`; or
+   - pending work, where it chooses `N` and `arg`, justifies them with
+     `Guarantee (HelpPend reqid N arg)`, runs the job, and assumes
+     `HelpDone reqid ret`.
+3. `Helping.help` chooses a request and job data, proves authority with the
+   same `HelpPend`, runs the job, and records `HelpDone`. A `Some N` job also
+   performs the scheduler namespace `Guarantee`/`Assume` handoff; a `None` job
+   omits that handoff.
 
-- helping bookkeeping: `HelpAuth`, `HelpPend`, `HelpDone`;
-- module payload: the invariant/resource state carried inside `IstHelp_gen Ist mn E`.
+The reqid-only `try_run` shape is essential. The resource selects the job data
+that the old private request map used to supply. Do not change it back to
+`try_run reqid N arg`: clients may store `∃ N, HelpPend reqid N arg`, and a
+later owner would then have no sound proof that the stored `N` equals a
+syntactic argument.
 
-Do not put user payload facts into the helping map unless the implementation genuinely needs them. Usually the map only records request state; the payload lives in `Ist`.
+## Public Resources
 
-## State Setup
+Use only these client-visible roles:
 
-Use `IstHelp_gen Ist mn E` when the surrounding proof has its own state invariant `Ist`.
+- `HelpPend reqid N arg`: exclusive authority to claim and execute that
+  pending job.
+- `HelpDone reqid ret`: persistent evidence that the request completed.
+- `hinv_ownE E`: linear ownership of cancellable-invariant namespaces.
+- `IstHelp Ist E st_s st_t := hinv_ownE E ∗ Ist st_s st_t`: add namespace
+  ownership to an indexed client state relation.
 
-Use the split/combine lemmas whenever an operation needs to manipulate module state independently from helping bookkeeping:
+Keep `HelpAuth` and `help_erasure_init_cond` private to HelpingOn/HelpingOff
+erasure. Pass `help_init_cond` opaquely to `helping_main` or
+`helping_main_filtered`; do not destruct it in client modules.
+
+## Owner Request Rule
+
+For a source call to `Helping.run`, apply `wsim_helping_run`. Do not pass an
+`IST` resource premise:
 
 ```coq
-iPoseProof (IstHelp_gen_split_Ist with "IST") as "[Hhelp HIst]".
+cStepsS.
+iApply wsim_helping_run; [simpl_map; simpl; f_equal|].
+iIntros (reqid) "Pend".
+```
+
+The first premise is the source module's concrete `Helping.run` lookup. The
+shown `simpl_map` proof is the common concrete-product case; adapt that premise
+to the actual module shape rather than invoking a nonexistent generic lookup
+tactic.
+
+The continuation receives exactly:
+
+```coq
+Pend : HelpPend reqid N arg
+```
+
+Store this token in the client invariant, run the job immediately, or later
+replace it with `HelpDone`. Do not add a client request map.
+
+## Owner Executes Pending Work
+
+Apply `wsim_helping_pend_try_run` to a pending token:
+
+```coq
+prependRetT tt.
+iApply (wsim_helping_pend_try_run with "Pend [-]").
+```
+
+Prove the job simulation. The rule chooses the token's `N` and `arg` inside
+`try_run`, so an existentially stored namespace is sufficient. After the job:
+
+```coq
+iIntros "Done".
+```
+
+Receive only `Done : HelpDone reqid ret`. The ambient `Ist` remains the WSim
+index; the rule does not consume and return a separate `IST` resource.
+
+If the operation already has persistent completion evidence, apply:
+
+```coq
+iApply (wsim_HelpDone_try_run with "Done").
+```
+
+`wsim_HelpDone_try_run` needs neither `N` nor `arg`, because the completed
+branch of reqid-only `try_run` does not inspect them.
+
+## Another Thread Helps
+
+For `Helping.help mn (Some N)`, apply `wsim_helping_help` with the selected
+pending token. Build the namespace-transition/job fupd required by the rule:
+
+```coq
+iApply (wsim_helping_help with "Pend").
+iExists n. iModIntro.
+(* open client invariants, run jobCode, close them *)
+```
+
+Distinguish:
+
+- `N`: the helper's current namespace;
+- `N2`: the pending job's namespace stored in `HelpPend`;
+- `E`: the target-side WSim/fupd mask at this rule boundary.
+
+Preserve the scheduler `winv` handoff between `N` and `N2`. Do not confuse
+these masks with the separate `hinv_ownE` resource, assume the helper and job
+namespaces are equal, or unfold `HelpingOn.help` to bypass a missing public
+rule.
+
+For `Helping.help mn None`, apply `wsim_helping_help_none` to
+`HelpPend reqid None arg`. This rule has no scheduler namespace handoff, but
+the job loop's scheduler yield remains part of the simulation. Do not coerce
+the request to `Some`, force it through `wsim_helping_help`, or unfold
+`HelpingOn.help`.
+
+## Indexed Client State and Nested Modules
+
+Use:
+
+```coq
+Definition IstFull : ist_type Σ :=
+  IstProd (IstSB scopes (IstHelp Ist E)) IstR.
+```
+
+This nested placement lets ordinary module-composition lemmas continue to see
+their expected `IstProd`/`IstSB` structure. A cancellable `hinv` accessor needs
+outer `IstHelp`, so rewrite only around each invariant access:
+
+```coq
+iEval (rewrite /IstFull IstHelp_nested_equiv) in "IST".
+iInv "Inv" with "[IST]" as "[IST HInv]" "Close"; first by iFrame.
 ...
-iPoseProof (IstHelp_gen_combine_Ist with "Hhelp HIst") as "IST".
+iMod ("Close" with "[...] IST") as "... IST".
+iEval (rewrite -IstHelp_nested_equiv) in "IST".
 ```
 
-If only helping bookkeeping is needed, `IstHelp_gen True mn E` is enough. Recombine before applying a lemma that expects the full `IstHelp_gen Ist mn E`.
+Reverse the equivalence on every non-contradictory close path before recursion,
+coinduction, or return. The equivalence preserves the exact current
+`st_src/st_tgt` indices; never existentially forget or reconstruct them from a
+different state.
 
-## Proving `Helping.run`
-
-When the implementation calls:
+If a local recursive lemma only transports the relation, parameterize it by:
 
 ```coq
-trigger (Call (Helping.run mn) (N, arg)↑)
+(Irun : ist_type Σ)
 ```
 
-apply:
+Use `Irun st_src st_tgt` unchanged in its pre/postcondition. Do not fix such a
+helper to plain `IstHelp Ist E` when the actual invariant carries a nested
+payload.
+
+## Cancellable Invariants
+
+Allocate helping-specific invariants with `hinv_alloc`. Open them with `iInv`
+through the `IntoAcc` instance or directly with `hinv_acc`.
+
+Keep these facts separate:
+
+- `HelpPend` authorizes job execution.
+- `hinv_ownE` authorizes opening the client's cancellable invariants.
+- ordinary client resources stay inside `Ist`; they do not belong in the
+  helping request protocol.
+
+Opening a `hinv` changes `IstHelp Ist F` to `IstHelp Ist (F ∖ ↑N)`. Closing it
+must restore both the invariant payload and the removed namespace ownership.
+
+## Erasure and Module Composition
+
+First prove the client against:
 
 ```coq
-iApply (wsim_helping_run with "IST").
+client-intermediate ★ HelpingOn.t mn jobCode
 ```
 
-Then prove the function lookup for `Helping.run`, receive the fresh `reqid`, and continue with:
+Then prove the intermediate module against the non-helping abstraction using
+`HelpingOff.t`. Finally compose them with:
 
-```coq
-iIntros (st_src2 reqid) "IST Hpend".
-```
+- `helping_main` for the ordinary unfiltered context; or
+- `helping_main_filtered` when another transformation, such as prophecy,
+  already reserves a nonempty function-name filter.
 
-`Hpend : HelpPend reqid N arg` is the owned pending ticket. The owner can either run the job directly or later observe `HelpDone`.
+The first client obligation receives `hinv_ownE ⊤`; the second erasure
+obligation does not. Keep unrelated linear resources in the obligation that
+uses them rather than passing them through private helping authority.
 
-## Running a Pending Job
+Do not unfold `help_init_cond` or call the internal erasure lemma from a client
+proof. If the public `helping_main*` shape cannot express the composition,
+report the missing abstraction.
 
-To execute pending work from the owner side, use:
+## Soundness and Scope Guardrails
 
-```coq
-iApply (wsim_helping_pend_try_run with "Hpend IST [-]").
-```
+- Require every thread that runs a job to discharge
+  `Guarantee (HelpPend reqid N arg)`.
+- Never treat mere possession of arbitrary client resources as job authority.
+- Never manufacture equality between an existential job namespace and a
+  syntactic namespace argument.
+- Never expose or duplicate private `HelpAuth`.
+- Do not add operational helping state to simplify a proof.
+- Preserve `HelpDone` persistence and `HelpPend` exclusivity.
+- Scope each independent Helping protocol with its own `helpingGS/help_name`.
+  `HelpPend` is already implicitly namespaced by that ghost name, so do not add
+  `mn` to its explicit key merely to support multiple Helping instances.
+  Deliberately share a `helpingGS` only when the modules are meant to share one
+  request protocol and compatible job semantics.
 
-Inside the continuation:
+## Proof Debugging Workflow
 
-- open or extract the payload invariant;
-- execute the module's `jobCode`;
-- update the logical resource exactly once;
-- produce `HelpDone reqid ret`;
-- restore `IstHelp_gen`.
+1. Search the actual public lemma statement and the closest migrated client.
+2. Open the smallest edited file through the base skill's Coqtail workflow.
+3. Step through owner-pending, owner-done, and helper branches separately.
+4. After editing an imported Helping file, rebuild that dependency and restart
+   Coqtail; never trust a stale session.
+5. If `iInv` cannot see `IstHelp`, inspect the nested relation and use
+   `IstHelp_nested_equiv`.
+6. If a pending owner cannot apply the rule, inspect whether the source still
+   uses the obsolete `try_run reqid N arg` shape.
+7. If a local helper loses state indices, generalize its transported
+   `ist_type`; do not weaken the public theorem or unfold internals.
+8. When porting the on/off proof to reqid-only `try_run`, make formerly
+   syntactic `N`/`arg` parameters explicit at relation constructors if Coqtail
+   reports shelved evars; do not change the relation merely to restore
+   inference.
+9. Use an exact `.vo` build only after Coqtail reaches `Qed`/EOF.
 
-If the request is already in progress or done, the lemma gives the corresponding continuation. Handle the done case with:
+## Validation Matrix
 
-```coq
-iApply (wsim_HelpDone_try_run with "Hdone IST").
-```
+After changing Helping itself, verify:
 
-## Helping Another Request
+1. `HelpingOn.v` and `HelpingTactics.v`;
+2. `HelpingOnOffproof.v`, covering pending, in-progress, and done cases;
+3. one owner-run client and one helper-run client;
+4. one nested-IST client;
+5. `HelpingFacts.v` if `helping_main*` or init-resource flow changed.
 
-When code calls:
-
-```coq
-trigger (Call (Helping.help mn) N↑)
-```
-
-use:
-
-- `wsim_helping_help` for `Some N`;
-- `wsim_helping_help_none` for namespace-free helping;
-- `wsim_helping_help2` only when the older proof shape specifically matches it.
-
-The helper receives a pending request, runs the same `jobCode`, and must leave a `HelpDone`. Use the same resource-update proof as the owner path; avoid duplicating incompatible logical transitions.
-
-## Job Code Discipline
-
-Keep `jobCode` small and resource-parametric:
-
-```coq
-res <- trigger (Choose Σ);;
-trigger (Guarantee (∀ x, P x arg ==∗ Own res ∗ Q x ret));;;
-trigger (AssumeRes res);;;
-Ret (inr ret).
-```
-
-Do not add a retry/abort boolean unless the job code really is a `tame_update`. Helping job code and `tame_update` look similar but are not the same interface.
-
-Return facts that depend on the pre-state should be included in `Q`, so owner and helper paths agree on the same logical witness.
-
-## Invariants and Namespaces
-
-If helper code opens module-local invariants, carry the available namespace ownership through `IstHelp_gen Ist mn E`.
-
-For helping-specific cancellable invariants:
-
-- allocate with `hinv_alloc`;
-- open with `hinv_acc` or the `IntoAcc` instance;
-- make sure the close continuation restores both the payload and `hinv_ownE`.
-
-Do not expose private helper invariants as final client-facing specs. Helping is intermediate proof machinery.
-
-## Common Pitfalls
-
-- Do not forget to recombine `IstHelp_gen True mn E` with the payload `Ist`.
-- Do not require the ambient payload to be identical to the helper payload if the generalized lemma permits them to differ.
-- Do not track unnecessary ghost-name bindings in `Ist` when a persistent invariant handle is enough.
-- Do not confuse `HelpPend` ownership with `HelpDone` persistence.
-- Do not change a tame or atomic public spec just to make helping bookkeeping easier.
-
-## Validation
-
-After changing helping code or proofs:
-
-- build the file that uses `Helping.run`;
-- build the file that uses `Helping.help`;
-- build the helping erasure/refinement representative if touched;
-- inspect both owner-run and helper-run branches before claiming the proof architecture is sound.
+After changing only a client, build the edited operation proof and its
+top-level composition module. Never report completion from a source-level
+`Qed` alone; require the relevant `.vo`.

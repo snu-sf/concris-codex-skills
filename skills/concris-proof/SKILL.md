@@ -15,12 +15,21 @@ this skill or any other skill file unless the user explicitly approves it;
 suggested additions should describe general proof roles, failure modes, or
 validation habits, not branch-local names or one-off theorem names.
 
-## Tool Discipline
+## Core Workflow
 
-- Use `mcp__coqtail__` (`rocq_start`, `rocq_step_to`, `rocq_goals`, `rocq_query`) as the default way to inspect and debug ConCRIS/Rocq proofs.
-- Do not use plain `make` loops as the primary proof workflow. Use batch builds only for final `.vo` confirmation, dependency-wide checks, or when coqtail cannot expose the needed failure; state why.
-- When a batch build is needed, do not run unbounded `make -j`; use a bounded job count such as `make -j8` or lower unless project-specific instructions give another limit.
-- After editing a file, reload or restart the coqtail session before trusting proof states.
+- Use Coqtail (`rocq_start`, `rocq_step_to`, `rocq_goals`, `rocq_query`) for
+  proof inspection and debugging.
+- Keep finite step/query timeouts and advance by one sentence or a small source
+  interval. Use timeout `0` only for a deliberately awaited expensive command.
+- Reload or restart the Coqtail session after editing before trusting its proof
+  state.
+- Use batch builds for final `.vo` confirmation, dependency checks, or a
+  failure Coqtail cannot expose. State the reason before falling back.
+- After a timeout, cancellation, or lifecycle error, read and follow
+  [Coqtail recovery](references/coqtail-recovery.md) before reusing the session.
+- Before a batch build, dependency-metadata repair, or memory-pressure
+  diagnosis, read and follow
+  [Rocq resources and builds](references/resources-and-builds.md).
 
 ## Spec Taxonomy
 
@@ -31,23 +40,9 @@ validation habits, not branch-local names or one-off theorem names.
 
 Do not globally ban `Take`. Ban arbitrary `Take X` only when the proof depends on `real_mod`/prophecy adequacy.
 
-## Tame Specs
-
-Tame specs are useful because they preserve Iris-style resource updates while remaining friendly to prophecy reasoning.
-
-Preferred shape:
-
-```coq
-pr <- trigger (Choose Σ);;
-trigger (Guarantee (... P ==∗ Own pr ∗ Q));;;
-trigger (AssumeRes pr).
-```
-
-Use tame specs when an abstract update must be represented as spec-executable behavior without arbitrary angelic `Take X`.
-
-Avoid replacing a tame spec with a direct atomic spec unless the module is intentionally moving to the atomic-spec layer.
-
-For `MemT`, use the memory tactics (`mLoad`, `mStore`, `mCas`, etc.) after confirming the linked memory module is the tame one.
+For proofs against tame specifications, also use `concris-tame-proof`. For
+Helping clients or erasure, also use `concris-helping-proof`. Keep
+domain-specific rules in those skills.
 
 ## Tactic Map
 
@@ -56,11 +51,43 @@ For `MemT`, use the memory tactics (`mLoad`, `mStore`, `mCas`, etc.) after confi
 - Coinduction: `wsim_reset`, `cCoind`, `cByCoind`
 - Scheduler/yield: `sYield`, `sYieldS`, `sYields`
 - Atomic specs: `aStepS`, `aStepT`, `aUnfoldS`, `aUnfoldT`
-- Tame specs: `wsim_TameUpdate_src`, `wsim_TameUpdate_tgt`
+- Tame specs: `tame_triple_src_pure`, `tame_triple_src`,
+  `tame_triple_tgt`, `tame_triple_both`, `tame_update_src_commit`,
+  `tame_update_tgt`, `tame_update_prepend_yield_src`,
+  `tame_update_both`, `tForceT`, `tAaccIntro`
 - Memory: `mLoad`, `mStore`, `mCas`, `mCmp`, `mAllocT`
-- Helping: `wsim_helping_run`, `wsim_helping_pend_try_run`, `wsim_helping_help`, `wsim_HelpDone_try_run`
+- Helping: `wsim_helping_run`, `wsim_helping_pend_try_run`,
+  `wsim_helping_help`, `wsim_helping_help_none`,
+  `wsim_HelpDone_try_run`
 
 Use this map to choose where to inspect next; check lemma statements before applying them.
+
+### Function Lookup And Inlining
+
+Try `cStartFunSim`, `cInlineS`, or `cInlineT` directly before proving a
+function lookup by hand. `cInlineS`/`cInlineT` use `prove_inline_cond`, whose
+lookup path is:
+
+1. use an equality already available in the proof context;
+2. derive a recursive `FnsemLookupResult` certificate from module
+   construction;
+3. fall back to `simpl_map`.
+
+`cStartFunSim` resolves its source function directly by certificate and then
+`simpl_map`; it does not have the initial context-equality branch. Its later
+target-side condition uses `prove_inline_cond`.
+
+The certificate path already follows supported constructors and wrappers such
+as `Mod.add`, `SMod.to_mod`, `sandbox_fnsemmap`, and registered filters. Do not
+make users declare manual “this module contains this function” instances or
+unfold the inlining tactic merely to enable the fast path. Treat the
+certificate as an optional optimization: unsupported symbolic module shapes
+must still reach the `simpl_map` fallback or report that the lookup cannot be
+resolved.
+
+When diagnosing lookup performance, separate `rewrite_fnsem_lookup` from the
+normalization and body-inlining phases so the profile identifies the actual
+bottleneck.
 
 ### Proof Script Style
 
@@ -81,17 +108,23 @@ proof-mode intro/destruct patterns can express the same step directly. Use
 compact patterns to clarify the proof's logical structure, not to hide important
 witnesses or invariant transitions.
 
+When a case split has semantically distinct but syntactically opaque branches,
+label the bullets with short comments such as `(* abort *)`, `(* commit *)`,
+`(* help *)`, or `(* skip *)`. Do not add labels to constructor cases whose
+meaning is already evident from the pattern.
+
 After a proof first reaches `Qed`, do a cleanup pass before reporting completion:
 remove redundant pure prepasses, replace manual rewrites with domain tactics
-(`aUnfold*`, `cNorm*`, `sYields`, `cSimpl`, etc.), compact adjacent tactics that
+(`aUnfold*`, `cNorm*`, `sYields`, `cSimpl in H`, etc.), compact adjacent tactics that
 form one logical step, and rerun Coqtail/build after the cleanup.
 
 ### Scheduler Yield Tactics
 
-When the target head form is a scheduler yield, use `sYields` first to advance
-through all immediately matchable target yields and follow-up target steps. Use
-a single `sYield` only when you intentionally want to consume exactly one
-matched source/target yield and inspect the intermediate state. If `sYields`
+Use `sYields` only when the first source/target yield is immediately matchable
+and saturation is intentional. Its first `sYield` is mandatory, so it fails
+when no paired yield is available. After each matched yield it runs
+`try cStepsT`, then repeats; those target steps may expose the next paired
+yield. Use `sYield` when exactly one matched yield is intended. If the sequence
 leaves a source-only yield, finish it with `sYieldS`.
 
 Use `sYieldS` when only the source side has a scheduler yield and the target
@@ -132,8 +165,18 @@ already an `isim`/`wsim`.
 `cStepS`/`cStepT` and `cForceS`/`cForceT` also run `cNormS`/`cNormT` around their
 main action, so they often remove the need for explicit normalization.
 
-Use `cSimpl` to simplify pure side conditions and equalities after symbolic
-steps, especially argument decoding or upcast/downcast facts.
+Use Ltac profiling only when the user explicitly requests tactic-performance
+or tactic-provenance analysis. Profile the smallest representative target,
+remove temporary profiling or `Time` commands afterward, and rebuild the
+target once without profiling before reporting the result.
+
+Never use bare `cSimpl`: it repeatedly normalizes the whole pure context. For
+argument decoding or upcast/downcast facts, orient the relevant equality if
+needed and use `cSimpl in H` on that named hypothesis. Do not introduce or copy
+an existing bare `cSimpl`; use a goal-local standard tactic when only the goal
+needs ordinary simplification. When replacing a bare `cSimpl`, inspect which
+unrelated hypotheses it also destructed or substituted, and make only genuinely
+required effects explicit.
 
 Use `cStepS` when the source side has one of these head forms:
 
@@ -177,7 +220,11 @@ actions is intended.
 
 ## Client Proofs And Cancellation
 
-For example-client proofs, first inspect the existing client/cancellation pattern in the examples repository, especially `CRIS-examples-private/incr/ClientIA.v` and the relevant `*All.v` file. Do not infer the client proof architecture only from the module currently being edited.
+For example-client proofs, first inspect an existing client/cancellation
+pattern in the checked-out examples. Search for `Cancel.cancel`,
+`SMod.to_mod_cancel`, and `SchA.fn_spawnable`, then read the relevant client
+proof and `*All.v` composition file. Do not infer the client proof architecture
+only from the module currently being edited.
 
 Scheduler-using clients usually need the two-level specmap pattern:
 
@@ -204,19 +251,10 @@ Lesson learned: the empty specmap belongs to the post-cancellation executable si
 
 ## Helping Machinery
 
-When helping is involved, distinguish:
-
-- helping bookkeeping: `HelpAuth`, `HelpPend`, `HelpDone`
-- user invariant/state resources: the payload inside `IstHelp_gen`
-
-Use split/combine lemmas when needed:
-
-```coq
-IstHelp_gen_split_Ist
-IstHelp_gen_combine_Ist
-```
-
-For `try_run`, use the generalized `wsim_helping_pend_try_run` so the helper bookkeeping payload can differ from the ambient simulation invariant payload when appropriate.
+Use `concris-helping-proof` for any proof that calls or erases Helping. Read
+its current API map before editing a client; do not reconstruct the
+architecture from legacy examples or unfold private Helping internals around a
+missing public rule.
 
 ## Spec Change Checklist
 

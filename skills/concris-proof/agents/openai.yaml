@@ -1,4 +1,4 @@
 interface:
-  display_name: "ConCRIS Proof"
-  short_description: "General ConCRIS/Rocq proof engineering."
-  default_prompt: "Use $concris-proof to debug or develop a ConCRIS/Rocq proof."
+  display_name: "ConCRIS Proof Engineering"
+  short_description: "Rocq workflows for ConCRIS refinement proofs"
+  default_prompt: "Use $concris-proof to debug and complete this ConCRIS/Rocq refinement proof."

@@ -1,4 +1,4 @@
 interface:
   display_name: "ConCRIS Helping Proof"
-  short_description: "Usage patterns for ConCRIS helping modules."
-  default_prompt: "Use $concris-helping-proof for ConCRIS proofs involving Helping.run, Helping.help, pending jobs, and helping invariants."
+  short_description: "Resource-only helping and erasure proof workflows"
+  default_prompt: "Use $concris-helping-proof to complete this ConCRIS helping or erasure proof."
