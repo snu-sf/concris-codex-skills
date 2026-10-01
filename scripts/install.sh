@@ -9,6 +9,7 @@ skills=(
   concris-proof
   concris-helping-proof
   concris-tame-proof
+  clightplus-proof
 )
 
 mkdir -p "$dest"

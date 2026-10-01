@@ -2,11 +2,12 @@
 
 Codex skills for ConCRIS/Rocq proof engineering.
 
-This repository contains three skills:
+This repository contains four skills:
 
 - `concris-proof`: general ConCRIS/Rocq proof engineering.
 - `concris-helping-proof`: proofs involving `Helping.run`, `Helping.help`, pending jobs, and helping resources.
 - `concris-tame-proof`: proofs against tame specifications such as `tame_triple` and `tame_update`.
+- `clightplus-proof`: ClightPlus U/N refinement and whole-program adequacy proofs.
 
 The specialized skills track current ConCRIS development APIs. They instruct
 Codex to inspect the checked-out definitions and lemma statements before using
@@ -49,6 +50,7 @@ mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 ln -s "$PWD/skills/concris-proof" "${CODEX_HOME:-$HOME/.codex}/skills/concris-proof"
 ln -s "$PWD/skills/concris-helping-proof" "${CODEX_HOME:-$HOME/.codex}/skills/concris-helping-proof"
 ln -s "$PWD/skills/concris-tame-proof" "${CODEX_HOME:-$HOME/.codex}/skills/concris-tame-proof"
+ln -s "$PWD/skills/clightplus-proof" "${CODEX_HOME:-$HOME/.codex}/skills/clightplus-proof"
 ```
 
 ## Notes for Maintainers

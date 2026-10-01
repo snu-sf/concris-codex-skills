@@ -1,0 +1,4 @@
+interface:
+  display_name: "ClightPlus Proof"
+  short_description: "Prove ClightPlus U/N refinements in ConCRIS"
+  default_prompt: "Use $clightplus-proof to prove this ClightPlus U/N refinement and validate the exact Rocq target."
